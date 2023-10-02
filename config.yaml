@@ -1,0 +1,7 @@
+{
+  "input_directory": "/home/muco/bags", # The directory where the bag files are located.
+  "output_directory": "/home/muco/bags_compressed", # The directory where the compressed bag files will be saved.
+  "copy": true,  # Copy the bag file to the output directory even if there is no raw image in the bag file,  If the raw image already exists in the bag file, it will be compressed and copied to the output directory.
+  "delete": false,  # Delete the original bag file after compression. If copy is true, the original bag file will be deleted after copying.
+  "info": true,  # Write the information of the bag file to the output directory. (rosbag info bag_file.bag > bag_file_info.txt)
+}

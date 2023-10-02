@@ -1,64 +1,128 @@
 #!/usr/bin/env python3
 
 import os
+import yaml
+import shutil
 import rosbag
 from sensor_msgs.msg import Image, CompressedImage
 from cv_bridge import CvBridge, CvBridgeError
 import cv2
 
-def convert_and_save_images(input_bag_file, output_bag_file):
-    # Open the input bag file for reading
+def convert_and_save_images(input_bag_file, output_bag_file, config):
     with rosbag.Bag(input_bag_file, 'r') as input_bag:
-        # Create a new bag file for writing
-        with rosbag.Bag(output_bag_file, 'w') as output_bag:
-            bridge = CvBridge()
-            for topic, msg, t in input_bag.read_messages():
-                if topic == "/spinnaker_ros_driver_node/cam_fm_01/image_raw":  # Replace with your raw image topic
-                    try:
-                        # Convert the raw image to OpenCV format
-                        raw_image_cv = bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
+        
+        is_there_raw_image_in_bag = False
+        is_there_raw_image_in_bag = any(types_and_topic_info.msg_type == "sensor_msgs/Image"
+                                        for types_and_topic_info in input_bag.get_type_and_topic_info()[1].values())
 
-                        # Compress the image
-                        _, compressed_image_data = cv2.imencode(".jpg", raw_image_cv)
+        if not is_there_raw_image_in_bag and config["copy"]:
+            shutil.copyfile(input_bag_file, output_bag_file)
+            return True
+        
+        if is_there_raw_image_in_bag:
+            with rosbag.Bag(output_bag_file, 'w') as output_bag:
+                bridge = CvBridge()
+                for topic, msg, t in input_bag.read_messages():
+                    if msg._type == "sensor_msgs/Image":
+                        try:
+                            raw_image_cv = bridge.imgmsg_to_cv2(
+                                msg, desired_encoding="passthrough")
 
-                        # Create a new compressed image message
-                        compressed_image_msg = CompressedImage()
-                        compressed_image_msg.header = msg.header
-                        compressed_image_msg.format = "jpeg"
-                        compressed_image_msg.data = compressed_image_data.tobytes()
+                            _, compressed_image_data = cv2.imencode(".jpg", raw_image_cv)
 
-                        # Write the compressed image message to the output bag
-                        output_bag.write("/spinnaker_ros_driver_node/cam_fm_01/compressed", compressed_image_msg, t)
+                            compressed_image_msg = CompressedImage()
+                            compressed_image_msg.header = msg.header
+                            compressed_image_msg.format = "jpeg"
+                            compressed_image_msg.data = compressed_image_data.tobytes()
 
-                    except CvBridgeError as e:
-                        print("CvBridge Error:", e)
-                    except Exception as e:
-                        print("Error:", e)
-                else:
-                    # For other topics, simply write the messages to the output bag
-                    output_bag.write(topic, msg, t)
+                            topic = topic.replace("/image_raw", "")
+                            output_bag.write(topic + "/compressed", compressed_image_msg, t)
+                            progress += 1
+
+                        except CvBridgeError as e:
+                            print("CvBridge Error:", e)
+                        except Exception as e:
+                            print("Error:", e)
+                    else:
+                        output_bag.write(topic, msg, t)
+                return True
+        else:
+            return False
 
 
-def process_all_bag_files(input_directory, output_directory):
+def process_all_bag_files(input_directory, output_directory, config):
+    processed_files = []
     for root, dirs, files in os.walk(input_directory):
         for filename in files:
             if filename.endswith(".bag"):
+
                 input_bag_file = os.path.join(root, filename)
 
-                # Create subdirectories in the output directory if they don't exist
                 relative_path = os.path.relpath(root, input_directory)
-                output_subdirectory = os.path.join(output_directory, relative_path)
+                output_subdirectory = os.path.join(
+                    output_directory, relative_path)
                 os.makedirs(output_subdirectory, exist_ok=True)
 
                 output_bag_file = os.path.join(output_subdirectory, filename)
-                convert_and_save_images(input_bag_file, output_bag_file)
+                processed = convert_and_save_images(
+                    input_bag_file, output_bag_file, config)
 
-                info_output_file = os.path.splitext(output_bag_file)[0] + ".txt"
-                os.system(f"rosbag info {input_bag_file} > {info_output_file}")
+                if processed:
+                    processed_files.append(input_bag_file)
+            
+                if config["info"] and processed:
+                    info_output_file = os.path.splitext(
+                        output_bag_file)[0] + ".txt"
+                    
+                    # due to >>> sh: 1: Syntax error: "(" unexpected
+                    output_bag_file_quoted = "\"" + output_bag_file + "\""
+                    info_output_file_quoted = "\"" + info_output_file + "\""
+                    os.system("rosbag info " + output_bag_file_quoted + " > " + info_output_file_quoted)
+                                    
+    if config["delete"]:
+        user_input = input("Are you sure about the deletion of the all processed original bag files? If it is copied, it will be also deleted. (yes/no): \n") # 
+        if user_input.lower() == "yes":
+            for file in processed_files:
+                os.remove(file)
+                print("Removed:", file)
+
+        elif user_input.lower() == "no":
+            print("Deletion is canceled.")
+
+        else:
+            print("Invalid input. Deletion is canceled.")
+
+    
+
+### TODO: progress bar
+# def print_percentage_bar(iteration, total, prefix='', suffix='', decimals=1, length=100, fill='█'):
+#     """
+#     Call in a loop to create terminal progress bar
+#     @params:
+#         iteration   - Required  : current iteration (Int)
+#         total       - Required  : total iterations (Int)
+#         prefix      - Optional  : prefix string (Str)
+#         suffix      - Optional  : suffix string (Str)
+#         decimals    - Optional  : positive number of decimals in percent complete (Int)
+#         length      - Optional  : character length of bar (Int)
+#         fill        - Optional  : bar fill character (Str)
+#     """
+#     if total == 0:
+#         total = 1
+#     percent = ("{0:." + str(decimals) + "f}").format(100 * (iteration / float(total)))
+#     filled_length = int(length * iteration // total)
+#     bar = fill * filled_length + '-' * (length - filled_length)
+#     print(f'\r{prefix} |{bar}| {percent}% {suffix}', end='\r')
+#     # Print New Line on Complete
+#     if iteration == total:
+#         print()
+
 
 
 if __name__ == "__main__":
-    input_directory = "/home/aesk/bags"  # Replace with your input directory path
-    output_directory = "/home/aesk/bags_compressed"  # Replace with your output directory path
+    with open("config.yaml", "r") as f:
+        config = yaml.safe_load(f)
 
-    process_all_bag_files(input_directory, output_directory)
+    input_directory = config["input_directory"]
+    output_directory = config["output_directory"]
+    process_all_bag_files(input_directory, output_directory, config)
